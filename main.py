@@ -66,3 +66,21 @@ def get_movies(limit: int = Query(default=100, ge=1)):
     logger.info(f"Retrieved movies: retuened_rows={len(data)}, total_rows={total}")
     return {"data": data, "total_rows": total}
 
+
+@app.get("/movies/search", response_model=list[dict])
+def query_movies(
+    columns: list[str] = Query(default=["title"]),
+    min_rating: float = Query(default=0, ge=0, le=10),
+    limit: int = Query(default=100, ge=1)
+):
+    try:
+        result = storage.query_movies(columns, min_rating, limit)
+    except ValueError as e:
+        # bad column name -> 400 instead of a crash
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    logger.info(
+        f"Queried movies: columns={columns}, min_rating={min_rating}, "
+        f"returned_rows={len(result)}"
+    )
+    return result
