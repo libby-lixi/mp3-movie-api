@@ -5,6 +5,7 @@ import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from src import (
     HealthResponse,
+    MovieCache,
     MovieStorage,
     MovieUploadInfo,
     MovieDataResponse,
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Data Processing API", version="1.0.0")
 app.middleware("http")(log_requests) # puts the "security guard" at the front door
 storage = MovieStorage()
+cache = MovieCache()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -63,17 +65,28 @@ async def upload_movies(file: UploadFile = File(...)):
         "column_names": list(df.columns),
     }
 
-
 @app.get("/movies", response_model=MovieDataResponse)
 def get_movies(limit: int = Query(default=100, ge=1)):
+    """Return up to limit movies plus the total count."""
+    # check the cache first
+    cached = cache.get(limit)
+    if cached is not None:
+        logger.info(f"Cache hit for movies: limit={limit}")
+        return cached
+
+    # cache miss, so read from the database like in Part 1
     total = storage.count_movies()
     if total == 0:
-        return {"data": [], "total_rows": 0}
-    
-    # select_columns already returns id + the columns we ask for
-    data = storage.select_columns(MOVIE_COLUMNS, limit)
-    logger.info(f"Retrieved movies: retuened_rows={len(data)}, total_rows={total}")
-    return {"data": data, "total_rows": total}
+        response = {"data": [], "total_rows": 0}
+    else:
+        data = storage.select_columns(MOVIE_COLUMNS, limit)
+        response = {"data": data, "total_rows": total}
+
+    # save the response so the next identical request is a hit
+    cache.set(limit, response)
+    logger.info(f"Retrieved movies: returned_rows={len(response['data'])}")
+    return response
+
 
 
 @app.get("/movies/search", response_model=list[dict])
@@ -125,6 +138,7 @@ def process_movies(config: ProcessConfig):
 
     # replace the stored movies with the cleaned ones
     storage.save(processed_df)
+    cache.invalidate() # cleared the cache
 
     logger.info(
         f"Processed movies: validation_removed={validation_rows_removed}, "

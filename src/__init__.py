@@ -6,3 +6,4 @@ from .models import (
     MovieProcessingReport,
 )
 from .storage import MovieStorage
+from .cache import MovieCache
