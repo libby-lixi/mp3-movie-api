@@ -114,4 +114,4 @@ class MovieStorage:
                 return result
             finally:
                 connection.close()
-                
+

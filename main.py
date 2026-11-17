@@ -1,11 +1,19 @@
 import io
-import json
 import logging
 from pathlib import Path
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from src import HealthResponse, MovieStorage, MovieUploadInfo, MovieDataResponse, MovieProcessingReport, ProcessConfig
-from src.storage import MO
+from src import (
+    HealthResponse,
+    MovieStorage,
+    MovieUploadInfo,
+    MovieDataResponse,
+    MovieProcessingReport,
+    ProcessConfig,
+)
+from src.storage import MOVIE_COLUMNS
+from src.utils import setup_logging
+from src.middleware import log_requests
 from data_pipeline import create_cleaning_report, process_data, validate_dataframe
 
 
@@ -15,6 +23,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Data Processing API", version="1.0.0")
 app.middleware("http")(log_requests) # puts the "security guard" at the front door
 storage = MovieStorage()
+
 
 @app.get("/health", response_model=HealthResponse)
 def health_check():
@@ -84,3 +93,45 @@ def query_movies(
         f"returned_rows={len(result)}"
     )
     return result
+
+@app.post("/movies/process", response_model=MovieProcessingReport)
+def process_movies(config: ProcessConfig):
+    df = storage.get()
+    if df.empty:
+        raise HTTPException(status_code=400, detail="No movies to process.")
+    
+    # turn the config model into a normal dict for the MP1 functions
+    config_dict = config.model_dump()
+    required_columns = config_dict["validation"]["required_columns"]
+    numeric_columns = config_dict["validation"]["numeric_columns"]
+
+    # make sure every numeric column actually exists
+    for column in numeric_columns:
+        if column not in df.columns:
+            logger.warning(f"Numeric column not found: {column}")
+            raise HTTPException(status_code=400, detail=f"Numeric column not found: {column}")
+
+    try:
+        validated_df = validate_dataframe(df, required_columns, numeric_columns)
+        validation_rows_removed = len(df) - len(validated_df)
+        logger.info(f"Validated movies: rows_removed={validation_rows_removed}")
+
+        before_processing = validated_df.copy()
+        processed_df = process_data(validated_df, config_dict)
+        cleaning_report = create_cleaning_report(before_processing, processed_df)
+    except ValueError as error:
+        logger.warning(f"Processing failed: error={error}")
+        raise HTTPException(status_code=400, detail=str(error))
+
+    # replace the stored movies with the cleaned ones
+    storage.save(processed_df)
+
+    logger.info(
+        f"Processed movies: validation_removed={validation_rows_removed}, "
+        f"cleaning_report={cleaning_report}"
+    )
+
+    return {
+        "validation_rows_removed": validation_rows_removed,
+        "cleaning_report": cleaning_report,
+    }
