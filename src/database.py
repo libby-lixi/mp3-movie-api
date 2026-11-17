@@ -16,5 +16,19 @@ def get_connection(db_path):
 
 def initialize_database(db_path):
     """Create the movie table if it does not exist."""
-    # create the movie table if needed, commit, and close the connection.
-    
+    connection = get_connection(db_path)
+    try: 
+        # no NOT NULL on the datga columns, so NULL is allowed
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS movies (
+                id INTEGER PRIMARY KEY,
+                title TEXT,
+                release_year INTEGER,
+                rating REAL,
+                genre TEXT
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
